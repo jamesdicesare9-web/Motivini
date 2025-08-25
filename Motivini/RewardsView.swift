@@ -1,120 +1,100 @@
-//
-//  RewardsView.swift
-//  Motivini
-//
-//  Created by James Di Cesare on 2025-08-25.
-//
-
-
 import SwiftUI
+import SwiftData
 import PhotosUI
 
 struct RewardsView: View {
-    @EnvironmentObject var app: AppModel
-    @State private var title: String = ""
-    @State private var points: String = ""
-    @State private var selectedItem: PhotosPickerItem?
-    @State private var pickedImage: UIImage?
+    @Environment(\.modelContext) private var context
+
+    @Query(
+        filter: #Predicate<Member> { $0.roleRaw == "child" },
+        sort: [SortDescriptor(\Member.name)]
+    ) private var children: [Member]
+
+    @State private var selectedChildIdx = 0
+    @State private var itemName = ""
+    @State private var costText = ""
+    @State private var photoItem: PhotosPickerItem?
+    @State private var photoData: Data?
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                if let childId = app.selectedChildId, let child = app.members.first(where: {$0.id == childId}) {
-                    GlassCard {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("\(child.name)’s Balance")
-                                .font(.headline)
-                            Text("$\(app.balance(for: childId))")
-                                .font(.system(size: 36, weight: .black, design: .rounded))
-                            Text("Redeem to purchase something and attach a photo to remember it.")
-                                .font(.footnote).foregroundStyle(.secondary)
+        NavigationStack {
+            Form {
+                Section("Child") {
+                    Picker("Who", selection: $selectedChildIdx) {
+                        ForEach(children.indices, id: \.self) { i in
+                            Text("\(children[i].avatarEmoji) \(children[i].name) – \(children[i].points) pts")
+                                .tag(i)
                         }
                     }
+                }
 
-                    GlassCard {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Redeem Points").font(.headline)
-                            TextField("What did you buy? (e.g., LEGO Minifigure)", text: $title)
-                                .textFieldStyle(.roundedBorder)
-                            TextField("Points to spend (e.g., 10)", text: $points)
-                                .keyboardType(.numberPad)
-                                .textFieldStyle(.roundedBorder)
+                Section("Redeem") {
+                    TextField("Item (e.g., Lego set)", text: $itemName)
+                    TextField("Cost in points", text: $costText)
+                        .keyboardType(.numberPad)
 
-                            PhotosPicker(selection: $selectedItem, matching: .images) {
-                                Label(pickedImage == nil ? "Add Photo (optional)" : "Change Photo", systemImage: "photo")
-                            }
-                            .onChange(of: selectedItem) { _, newItem in
-                                Task {
-                                    if let data = try? await newItem?.loadTransferable(type: Data.self),
-                                       let ui = UIImage(data: data) {
-                                        pickedImage = ui
-                                    }
+                    PhotosPicker(selection: $photoItem, matching: .images) {
+                        Label("Add Photo", systemImage: "photo")
+                    }
+
+                    if let data = photoData, let ui = UIImage(data: data) {
+                        Image(uiImage: ui)
+                            .resizable().scaledToFit()
+                            .frame(maxHeight: 160)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+
+                    Button("Redeem") { redeem() }
+                        .disabled(!canRedeem)
+                }
+
+                Section("History") {
+                    if children.indices.contains(selectedChildIdx) {
+                        let m = children[selectedChildIdx]
+                        ForEach(m.purchases.sorted { $0.date > $1.date }) { p in
+                            HStack {
+                                Image.fromPurchase(p)
+                                    .resizable().scaledToFill()
+                                    .frame(width: 44, height: 44)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                VStack(alignment: .leading) {
+                                    Text(p.itemName).font(.headline)
+                                    Text(p.date.formatted(date: .numeric, time: .omitted))
+                                        .font(.caption).foregroundStyle(.secondary)
                                 }
-                            }
-
-                            if let img = pickedImage {
-                                Image(uiImage: img)
-                                    .resizable().scaledToFit()
-                                    .frame(height: 160)
-                                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                            }
-
-                            Button {
-                                guard let pts = Int(points), pts > 0 else { return }
-                                app.redeem(childId: childId, title: title.isEmpty ? "Item" : title, points: pts, image: pickedImage)
-                                title = ""; points = ""; pickedImage = nil; selectedItem = nil
-                            } label: {
-                                Label("Redeem", systemImage: "gift.fill")
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.purple)
-                        }
-                    }
-
-                    GlassCard {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Redemption History")
-                                .font(.headline)
-                            let redemptions = app.redemptions(for: childId)
-                            if redemptions.isEmpty {
-                                Text("No redemptions yet.")
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                ForEach(redemptions) { r in
-                                    HStack(alignment: .top, spacing: 12) {
-                                        if let name = r.photoFilename {
-                                            let url = DataStore.shared.imageURL(for: name)
-                                            if let ui = UIImage(contentsOfFile: url.path) {
-                                                Image(uiImage: ui)
-                                                    .resizable().scaledToFill()
-                                                    .frame(width: 56, height: 56)
-                                                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                                            }
-                                        } else {
-                                            RoundedRectangle(cornerRadius: 10)
-                                                .fill(.gray.opacity(0.15))
-                                                .frame(width: 56, height: 56)
-                                                .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
-                                        }
-                                        VStack(alignment: .leading) {
-                                            Text(r.title).font(.headline)
-                                            Text("-\(r.pointsSpent) pts  •  " + r.date.formatted(date: .abbreviated, time: .shortened))
-                                                .font(.caption).foregroundStyle(.secondary)
-                                        }
-                                        Spacer()
-                                    }
-                                    Divider().opacity(0.15)
-                                }
+                                Spacer()
+                                Text("-\(p.pointsSpent) pts").foregroundStyle(.red)
                             }
                         }
                     }
-                } else {
-                    Text("Select a child in Settings.")
-                        .padding()
                 }
             }
-            .padding(16)
+            .navigationTitle("Rewards")
+            .onChange(of: photoItem) { _, new in
+                Task {
+                    if let data = try? await new?.loadTransferable(type: Data.self) {
+                        photoData = data
+                    }
+                }
+            }
         }
-        .navigationTitle("Rewards")
+    }
+
+    private var canRedeem: Bool {
+        guard children.indices.contains(selectedChildIdx),
+              let cost = Int(costText), cost > 0 else { return false }
+        return children[selectedChildIdx].points >= cost && !itemName.isEmpty
+    }
+
+    private func redeem() {
+        guard canRedeem else { return }
+        let m = children[selectedChildIdx]
+        let cost = Int(costText) ?? 0
+        m.points -= cost
+        let p = Purchase(itemName: itemName, pointsSpent: cost, photoData: photoData, member: m)
+        context.insert(p)
+        try? context.save()
+        // reset
+        itemName = ""; costText = ""; photoItem = nil; photoData = nil
     }
 }

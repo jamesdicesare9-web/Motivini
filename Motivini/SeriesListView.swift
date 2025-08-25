@@ -7,92 +7,56 @@
 
 
 import SwiftUI
+import SwiftData
 
 struct SeriesListView: View {
-    @EnvironmentObject var app: AppModel
-    @State private var note: String = ""
+    @Environment(\.modelContext) private var context
+
+    @Query(
+        filter: #Predicate<Member> { $0.roleRaw == "child" },
+        sort: [SortDescriptor(\Member.name)]
+    ) private var children: [Member]
+
+    @Query(sort: [SortDescriptor(\Category.name)])
+    private var categories: [Category]
+
+    @State private var selectedChildIdx = 0
 
     var body: some View {
-        VStack {
-            if let childId = app.selectedChildId {
-                List {
-                    Section {
-                        ForEach(app.seriesTemplates.filter { $0.appliesToMemberIds.contains(childId) }) { template in
-                            GlassRow {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    HStack {
-                                        Text(template.title).font(.headline)
-                                        Spacer()
-                                        Text("\(template.threshold)× → +\(template.awardPoints)")
-                                            .font(.subheadline).bold()
-                                    }
-                                    Text("\(template.category) • \(template.window.rawValue.capitalized) • Limit \(template.perDayLimit)x/day")
-                                        .font(.caption).foregroundStyle(.secondary)
-
-                                    let inst = app.instance(for: childId, template: template)
-                                    ProgressView(value: Double(inst.approvedCount), total: Double(template.threshold))
-                                        .tint(.purple)
-
-                                    HStack {
-                                        Button {
-                                            app.childLogCompletion(childId: childId, template: template, note: nil)
-                                        } label: {
-                                            Label("Log Completion (needs parent approval)", systemImage: "plus.circle.fill")
-                                        }
-                                        .buttonStyle(.borderedProminent)
-                                        .tint(.purple)
-
-                                        Spacer()
-                                        if inst.mintedAtThresholds.contains(template.threshold) {
-                                            Label("Awarded +\(template.awardPoints)", systemImage: "checkmark.seal.fill")
-                                                .foregroundStyle(.green)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } header: {
-                        Text("Your Punch Cards")
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                Picker("Child", selection: $selectedChildIdx) {
+                    ForEach(children.indices, id: \.self) { i in
+                        Text("\(children[i].avatarEmoji) \(children[i].name)").tag(i)
                     }
+                }
+                .pickerStyle(.segmented)
 
-                    Section("Pending Status") {
-                        let mine = app.pendingLogs(for: childId)
-                        if mine.isEmpty {
-                            Text("No pending items. Great job!")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(mine) { log in
-                                if let template = app.seriesTemplates.first(where: {$0.id == log.templateId}) {
-                                    HStack {
-                                        VStack(alignment: .leading) {
-                                            Text(template.title)
-                                            Text(log.timestamp.formatted(date: .abbreviated, time: .shortened))
-                                                .font(.caption).foregroundStyle(.secondary)
-                                        }
-                                        Spacer()
-                                        Text("Awaiting parent")
-                                            .font(.caption).foregroundStyle(.orange)
-                                    }
-                                }
+                List {
+                    ForEach(categories) { cat in
+                        HStack {
+                            Text("\(cat.icon) \(cat.name)")
+                            Spacer()
+                            Button {
+                                log(for: cat)
+                            } label: {
+                                Label("Log", systemImage: "plus.circle.fill")
                             }
+                            .buttonStyle(.borderedProminent)
                         }
                     }
                 }
-                .listStyle(.insetGrouped)
-            } else {
-                Text("Select a child in Settings.")
-                    .padding()
             }
+            .padding(.horizontal)
+            .navigationTitle("Log Activity")
         }
-        .navigationTitle("Punch Cards")
     }
-}
 
-private struct GlassRow<Content: View>: View {
-    var content: () -> Content
-    init(@ViewBuilder content: @escaping () -> Content) { self.content = content }
-    var body: some View {
-        GlassCard { content() }
-            .listRowBackground(Color.clear)
+    private func log(for category: Category) {
+        guard children.indices.contains(selectedChildIdx) else { return }
+        let child = children[selectedChildIdx]
+        let entry = Completion(member: child, category: category)
+        context.insert(entry)
+        try? context.save()
     }
 }
