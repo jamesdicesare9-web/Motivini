@@ -1,17 +1,14 @@
-//
-//  MotiviniApp.swift
-//  Motivini
-//
-//  Created by James Di Cesare on 2025-08-25.
-//
-
 import SwiftUI
 
 @main
 struct MotiviniApp: App {
+    @StateObject private var appModel = AppModel()
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
+                .environmentObject(appModel)
+                .preferredColorScheme(.light)
         }
     }
 }
