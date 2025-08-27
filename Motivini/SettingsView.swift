@@ -1,120 +1,79 @@
 import SwiftUI
-import SwiftData
 
 struct SettingsView: View {
-    @Environment(\.modelContext) private var context
-    @Query(sort: [SortDescriptor(\Member.name)]) private var members: [Member]
-    @Query(sort: [SortDescriptor(\Category.name)]) private var categories: [Category]
-
-    // member form
-    @State private var name = ""
-    @State private var role: Role = .child
-    @State private var emoji = "🙂"
-
-    // category form
-    @State private var catName = ""
-    @State private var catIcon = "✅"
-    @State private var target = 5
-    @State private var award = 2
-
-    // parent PIN
-    @AppStorage("parentPIN") private var parentPIN: String = "1234"
-    @State private var newPin = ""
-    @State private var confirmPin = ""
+    @EnvironmentObject var app: AppViewModel
+    @State private var notificationsEnabled = false
 
     var body: some View {
-        ParentGate {
-            NavigationStack {
-                Form {
-                    Section("Add Member") {
-                        TextField("Name", text: $name)
-                        Picker("Role", selection: $role) {
-                            ForEach(Role.allCases) { r in Text(r.label).tag(r) }
-                        }
-                        TextField("Avatar emoji", text: $emoji)
-                        Button("Add Member") { addMember() }
-                            .disabled(name.isEmpty)
+        Form {
+            // Account
+            if let acc = app.currentAccount {
+                Section("Account") {
+                    Text(acc.displayName)
+                    if !acc.email.isEmpty {
+                        Text(acc.email).foregroundStyle(.secondary)
                     }
+                    Button("Sign Out", role: .destructive) { app.signOut() }
+                }
 
-                    Section("Members") {
-                        ForEach(members) { m in
+                // Family selection
+                Section("Family") {
+                    if acc.families.isEmpty {
+                        Text("No families yet")
+                    } else {
+                        ForEach(acc.families, id: \.self) { f in
                             HStack {
-                                Text(m.avatarEmoji)
-                                Text("\(m.name) • \(m.role.label)")
+                                Text(f.name)
                                 Spacer()
-                                Text("\(m.points) pts").foregroundStyle(.secondary)
+                                if app.selectedFamily?.id == f.id {
+                                    Image(systemName: "checkmark.circle.fill")
+                                }
                             }
+                            .contentShape(Rectangle())
+                            .onTapGesture { Task { await app.switchFamily(to: f) } }
                         }
-                        .onDelete(perform: deleteMembers)
-                    }
-
-                    Section("Add Category") {
-                        TextField("Name", text: $catName)
-                        TextField("Icon (emoji or SF Symbol)", text: $catIcon)
-                        Stepper("Target count: \(target)", value: $target, in: 1...50)
-                        Stepper("Points per award: \(award)", value: $award, in: 0...100)
-                        Button("Add Category") { addCategory() }
-                            .disabled(catName.isEmpty)
-                    }
-
-                    Section("Categories") {
-                        ForEach(categories) { c in
-                            VStack(alignment: .leading) {
-                                Text("\(c.icon) \(c.name)")
-                                Text("\(c.pointsPerAward) pts every \(c.targetCount)x")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                        .onDelete(perform: deleteCategories)
-                    }
-
-                    Section("Parent PIN") {
-                        Text("Current PIN: ••••")
-                            .foregroundStyle(.secondary)
-                        SecureField("New 4-digit PIN", text: $newPin)
-                            .keyboardType(.numberPad)
-                        SecureField("Confirm PIN", text: $confirmPin)
-                            .keyboardType(.numberPad)
-                        Button("Update PIN") {
-                            guard newPin.count == 4, newPin.allSatisfy(\.isNumber) else { return }
-                            guard newPin == confirmPin else { return }
-                            parentPIN = newPin
-                            newPin = ""; confirmPin = ""
-                            Haptics.success()
-                        }
-                        .disabled(newPin.isEmpty || confirmPin.isEmpty)
                     }
                 }
-                .navigationTitle("Settings")
             }
+
+            // Push notifications (stubbed)
+            Section("Notifications") {
+                Toggle("Enable Push Notifications", isOn: $notificationsEnabled)
+                    .onChange(of: notificationsEnabled) { _, _ in
+                        Task { _ = await PushNotificationManager.shared.requestPermission() }
+                    }
+            }
+
+            // Points & cash conversion
+            if let fam = app.selectedFamily {
+                Section("Points & Rewards") {
+                    // Bind directly to a computed Binding that writes the updated family through the view model
+                    let pointsBinding = Binding<Double>(
+                        get: { fam.pointsConfig.pointsPerDollar },
+                        set: { newVal in
+                            var f = fam
+                            f.pointsConfig.pointsPerDollar = max(0.1, newVal)
+                            Task { await app.saveFamily(f) }
+                        }
+                    )
+
+                    Stepper(value: pointsBinding, in: 0.1...100, step: 0.5) {
+                        Text("Points per $1: \(String(format: "%.1f", fam.pointsConfig.pointsPerDollar))")
+                    }
+
+                    if
+                        let me = fam.members.first(where: { $0.name == app.currentAccount?.displayName }),
+                        let pts = fam.memberPoints[me.id]
+                    {
+                        let dollars = fam.pointsConfig.dollars(forPoints: pts)
+                        Text("Your Balance: \(pts) pts  (≈ $\(String(format: "%.2f", dollars)))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            Section("About") { Text("Motivini v1.2 • Local-first MVP") }
         }
-    }
-
-    private func addMember() {
-        let m = Member(name: name, role: role, avatarEmoji: emoji)
-        context.insert(m)
-        try? context.save()
-        name = ""; emoji = role == .parent ? "🧑‍🍼" : "🧒"
-        Haptics.success()
-    }
-
-    private func addCategory() {
-        let c = Category(name: catName, icon: catIcon, targetCount: target, pointsPerAward: award)
-        context.insert(c)
-        try? context.save()
-        catName = ""; catIcon = "✅"; target = 5; award = 2
-        Haptics.success()
-    }
-
-    private func deleteMembers(at offsets: IndexSet) {
-        for i in offsets { context.delete(members[i]) }
-        try? context.save()
-        Haptics.warning()
-    }
-
-    private func deleteCategories(at offsets: IndexSet) {
-        for i in offsets { context.delete(categories[i]) }
-        try? context.save()
-        Haptics.warning()
     }
 }
